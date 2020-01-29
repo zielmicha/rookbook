@@ -1,0 +1,13 @@
+.data-table {
+    border-collapse: collapse;
+    min-width: 20em;
+}
+
+.data-table thead {
+    background: #eee;
+}
+
+.data-table td, .data-table th {
+    border: 1px solid #aaa;
+    padding: 0.3em;
+}
