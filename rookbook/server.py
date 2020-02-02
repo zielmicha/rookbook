@@ -47,8 +47,19 @@ class WebServer:
 class Handler:
     def __init__(self, book):
         self.book = book
+        self.websockets = []
 
     async def run(self, websocket):
+        await self.send_full_update(websocket)
+
+        self.websockets.append(websocket)
+        try:
+            async for msg in websocket:
+                await self.handle_message(websocket, msg)
+        finally:
+            self.websockets.remove(websocket)
+
+    async def send_full_update(self, websocket):
         await websocket.send(json.dumps({'type': 'document', 'data': self.book.get_document_text()}))
 
         for id, widget in self.book.widgets.items():
@@ -56,8 +67,29 @@ class Handler:
                                              'data': widget.data_json,
                                              'header': widget.header_json}))
 
+    async def handle_message(self, websocket, msg_data):
+        msg = json.loads(msg_data)
+        if msg['type'] == 'set':
+            self.book.set(msg['path'], msg['value'])
+            await self.send_full_update(websocket)
+            await websocket.send(json.dumps({'type': 'set-done', 'epoch': msg['epoch']}))
+        elif msg['type'] == 'action':
+            self.book.action(msg['path'], msg['value'])
+            await self.send_full_update(websocket)
+        elif msg['type'] == 'doc-add-widget':
+            self.book.doc_add_widget(parent_id=msg['parentId'], element_name=msg['element'])
+            await self.send_full_update(websocket)
+        elif msg['type'] == 'doc-set-text':
+            self.book.doc_set_text(selector=msg['selector'], new_value=msg['new_value'])
+            await self.send_full_update(websocket)
+        elif msg['type'] == 'doc-delete':
+            self.book.doc_delete(selector=msg['selector'])
+            await self.send_full_update(websocket)
+        else:
+            print('unknown message', msg)
+
 if __name__ == '__main__':
     book = book.Book(document_path='example/simple.rkbk', data_path=':memory:')
-    book.store.insert(table_id='foo', row_id=1, data={'n1': 5, 'n2': 'foo'})
+    #book.store.insert(table_id='foo', data={'n1': 5, 'n2': 'foo'})
     book.refresh()
     WebServer(Handler(book)).main('localhost', 5000)

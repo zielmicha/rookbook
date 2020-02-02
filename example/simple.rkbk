@@ -12,6 +12,9 @@
 	  <option id="bar" />
 	</choice>
       </data-col>
+      <data-col id="n3">
+	<string/>
+      </data-col>
     </table>
 
     <variable id="counter12"><int/></variable>
@@ -30,6 +33,7 @@
     </table-view>
 
     <!-- test -->
+    <variable id="v1"><string/></variable>
     <text id="_0">Sum</text>
     <variable-view id="_1">
       <python>counter12 + 1</python>

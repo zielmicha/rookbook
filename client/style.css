@@ -7,7 +7,38 @@
     background: #eee;
 }
 
+.data-table tr.focused {
+    background: #fafafa;
+}
+
 .data-table td, .data-table th {
     border: 1px solid #aaa;
-    padding: 0.3em;
 }
+
+.data-table td {
+    padding: 0em;
+}
+
+.data-table th {
+    padding: 0.2em;
+}
+
+.data-table td > input, .data-table td > select {
+    border: none;
+    padding: 0.2em;
+    margin: none;
+    height: 25px;
+    box-sizing: border-box;
+    background: inherit;
+}
+
+.data-table td > input:focus, .data-table td > select:focus {
+    outline-color: rgb(77, 144, 254);
+    outline-offset: -3px;
+    outline-style: auto;
+    outline-width: 5px;
+}
+
+.data-table td.id-cell {
+    padding: 0em 1em;
+]
