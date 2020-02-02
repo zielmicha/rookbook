@@ -38,5 +38,8 @@
     <variable-view id="_1">
       <python>counter12 + 1</python>
     </variable-view>
+    <table id="tbl1">
+      <data-col id="col1"><string/></data-col>
+    </table>
   </sheet>
 </rookbook>

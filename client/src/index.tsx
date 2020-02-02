@@ -19,6 +19,29 @@ function replaceValuePath(value: any, path: Array<string>, newValue: any): any {
     }
 }
 
+function immutableMap<K, V>(m: Immutable.Map<K, V>, f: ((v: V) => V)): Immutable.Map<K, V> {
+    let anythingChanged = false;
+    let result = m.map((v: V) => {
+	const v1 = f(v);
+	if (v !== v1) anythingChanged = true;
+	return v1;
+    });
+    if (anythingChanged) return result;
+    else return m;
+}
+
+function pruneOldAux(maxEpoch: number, value: any): any {
+    if (!value) {
+	return null;
+    } else if (typeof value.epoch != "undefined") { // fixme: ugly type check
+	if (maxEpoch >= value.epoch) return null;
+	return value;
+    } else {
+	if (!value.asImmutable) throw "bad type?";
+	return immutableMap(value, (v) => pruneOldAux(maxEpoch, v));
+    }
+}
+
 class PendingValue {
     path: Array<string>
     value: any
@@ -36,6 +59,10 @@ class PendingValue {
 	};
 	this.doActionPath = doActionPath;
 	this.doSetPath = doSetPath;
+    }
+
+    pruneOld(maxEpoch: number) {
+	return new PendingValue(this.path, pruneOldAux(maxEpoch, this.value), this.doSetPath, this.doActionPath);
     }
 
     getValue(defaultValue: any) {
@@ -76,13 +103,16 @@ class BookState {
 	this.setSelf = setSelf;
 	this.doSetPath = (path: Array<string>, value: any) => {
 	    console.log(path, value)
-	    this.sendMessage({
-		"type": "set",
-		"path": path,
-		"value": value,
-		"epoch": this.nextEpochNumber
+
+	    setSelf((book) => {
+		book.sendMessage({
+		    "type": "set",
+		    "path": path,
+		    "value": value,
+		    "epoch": book.nextEpochNumber
+		});
+		return book.withSetPendingValue(path, value);
 	    });
-	    setSelf(book => book.withSetPendingValue(path, value));
 	};
 	this.doActionPath = (path: Array<string>, value: any) => {
 	    this.sendMessage({type: 'action', path: path, value: value});
@@ -112,6 +142,7 @@ class BookState {
 	state.widgetHeaders = this.widgetHeaders;
 	state.pendingValues = this.pendingValues;
 	state.websocket = this.websocket;
+	state.nextEpochNumber = this.nextEpochNumber;
 	return state;
     }
 
@@ -119,6 +150,12 @@ class BookState {
 	let state = this.copy();
 	state.widgetData.set(key, msg.data);
 	state.widgetHeaders.set(key, msg.header);
+	return state;
+    }
+
+    withServerEpochDone(serverEpoch: number): BookState {
+	let state = this.copy();
+	state.pendingValues = this.pendingValues.pruneOld(serverEpoch);
 	return state;
     }
 }
@@ -256,7 +293,7 @@ function TableRow({ pendingValues, header, row }: { pendingValues: PendingValue,
 	    tabIndex={0} onFocus={onFocus} onBlur={onBlur}
 	    onKeyUp={onKeyUp}>{row._id}</td>
 	{header.columns.map((col: ColumnInfo) => (
-	    <TableCell key={col.id} columnInfo={col} pendingValue={pendingValues.sub(name)} value={row[name]} />
+	    <TableCell key={col.id} columnInfo={col} pendingValue={pendingValues.sub(col.id)} value={row[col.id]} />
 	))}
     </tr>
 }
@@ -272,8 +309,10 @@ function ColumnHeader({ bookState, columnInfo } : { bookState: BookState, column
 	}
     }, [columnInfo, bookState]);
 
+    const cellEditLink = '#/column/' + encodeURIComponent(columnInfo.table_id) + '/' + encodeURIComponent(columnInfo.id);
+
     return <td tabIndex={0}
-               onKeyUp={onKeyUp}>{ columnInfo.id }</td>
+               onKeyUp={onKeyUp}>{ columnInfo.id } <a href={cellEditLink}>edit</a> </td>
 }
 
 function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
@@ -289,6 +328,22 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
     let dataAndNew: Array<any> = Array.from(data);
     dataAndNew.push({_id: null})
 
+    const addColumn = React.useCallback(() => {
+	if (xmlNode.nodeName == "table") {
+	    bookState.sendMessage({
+		'type': 'doc-add',
+		'selector': 'table[id=' + escapeCssValue(id) + ']',
+		'xml': '<data-col id="column1"><string/></data-col>'
+	    })
+	} else {
+	    bookState.sendMessage({
+		'type': 'doc-add',
+		'selector': 'table-view[id=' + escapeCssValue(id) + ']',
+		'xml': '<computed-col id="column1"><python>None</python></computed-col>'
+	    })
+	}
+    }, [bookState, xmlNode, id]);
+
     return <div>
 	<table className="data-table">
 	    <thead>
@@ -300,13 +355,13 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
 				   key={col.id} columnInfo={col} />
 		    })}
 		    <td>
-			<button>+</button>
+			<button onClick={addColumn}>+</button>
 		    </td>
 		</tr>
 	    </thead>
 	    <tbody>
 		{dataAndNew.map((row) => {
-		    let key = row._id == null ? nextNewId : row._id; // TODO: better prediction of new ID
+		    let key = row._id == null ? nextNewId : row._id;
 		    return <TableRow pendingValues={bookState.pendingValues.sub(id).sub(row._id)}
 				     header={header} row={row} key={key} />;
 		})}
@@ -347,7 +402,7 @@ function parseXml(s: string): Element {
     return new DOMParser().parseFromString(s, "text/xml").children[0];
 }
 
-function Main() {
+function Main({ currentLocation }: { currentLocation: string }) {
     const [xmlData, setXmlData] = React.useState();
     const [bookState, setBookState] = React.useState(new BookState((x) => setBookState(x)));
     const xmlNode = React.useMemo(() => xmlData && parseXml(xmlData), [xmlData]);
@@ -358,6 +413,10 @@ function Main() {
 	    setXmlData(msg.data);
 	} else if (msg.type == "data") {
 	    setBookState(bookState => bookState.withData(msg.id, msg));
+	} else if (msg.type == "set-done") {
+	    setBookState(bookState => bookState.withServerEpochDone(msg.epoch));
+	} else {
+	    console.log("unknown message", msg)
 	}
     }
 
@@ -369,6 +428,7 @@ function Main() {
     if (xmlNode) {
 	const rootSheet = xmlNode.querySelector('rookbook > sheet');
 	return <div>
+	    <div>location: {currentLocation}</div>
 	    <LinearLayoutWidget bookState={bookState} xmlNode={rootSheet} />
 	    <pre>{xmlData}</pre>
 	</div>;
@@ -377,7 +437,16 @@ function Main() {
     }
 }
 
+function MainRouter() {
+    const [currentLocation, setCurrentLocation] = React.useState(location.hash);
+
+    React.useEffect(() => {
+	window.addEventListener("hashchange", () => setCurrentLocation(location.hash), false);
+    });
+    return <Main currentLocation={currentLocation} />
+}
+
 ReactDOM.render(
-    <Main />,
+    <MainRouter />,
     document.getElementById("body")
 );

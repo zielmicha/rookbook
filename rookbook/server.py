@@ -1,4 +1,5 @@
 import asyncio, http, os, io, glob, websockets, json
+from lxml import etree
 from . import book
 
 def get_static(content_type, path):
@@ -67,24 +68,32 @@ class Handler:
                                              'data': widget.data_json,
                                              'header': widget.header_json}))
 
+    async def full_update(self):
+        # TODO: async
+        for ws in self.websockets:
+            await self.send_full_update(ws)
+
     async def handle_message(self, websocket, msg_data):
         msg = json.loads(msg_data)
         if msg['type'] == 'set':
             self.book.set(msg['path'], msg['value'])
-            await self.send_full_update(websocket)
+            await self.full_update()
             await websocket.send(json.dumps({'type': 'set-done', 'epoch': msg['epoch']}))
         elif msg['type'] == 'action':
             self.book.action(msg['path'], msg['value'])
-            await self.send_full_update(websocket)
+            await self.full_update()
         elif msg['type'] == 'doc-add-widget':
             self.book.doc_add_widget(parent_id=msg['parentId'], element_name=msg['element'])
-            await self.send_full_update(websocket)
+            await self.full_update()
         elif msg['type'] == 'doc-set-text':
             self.book.doc_set_text(selector=msg['selector'], new_value=msg['new_value'])
-            await self.send_full_update(websocket)
+            await self.full_update()
         elif msg['type'] == 'doc-delete':
             self.book.doc_delete(selector=msg['selector'])
-            await self.send_full_update(websocket)
+            await self.full_update()
+        elif msg['type'] == 'doc-add':
+            self.book.doc_add(selector=msg['selector'], element=etree.XML(msg['xml']))
+            await self.full_update()
         else:
             print('unknown message', msg)
 
@@ -92,4 +101,8 @@ if __name__ == '__main__':
     book = book.Book(document_path='example/simple.rkbk', data_path=':memory:')
     #book.store.insert(table_id='foo', data={'n1': 5, 'n2': 'foo'})
     book.refresh()
+
+    from . import common
+    common.start_asyncio_ipython(local_ns=globals())
+
     WebServer(Handler(book)).main('localhost', 5000)

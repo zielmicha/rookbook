@@ -53,9 +53,13 @@ class SqliteStore:
 
     def set_field(self, table_id, row_id, key, value):
         row = self.get_row(table_id, row_id)
-        if row is None: row = {}
-        row[key] = value
-        self.set_row(table_id, row_id, row)
+        if row is None:
+            row = {key: value}
+            self.conn.execute('insert into rookbook_data (table_id, mtime, row_id, payload) values (?,datetime(),?,?)',
+                              (table_id, row_id, json.dumps(row)))
+        else:
+            row[key] = value
+            self.set_row(table_id, row_id, row)
 
 class Book:
     def __init__(self, data_path, document_path):
@@ -138,6 +142,11 @@ class Book:
         parent_map[elem].remove(elem)
         self.refresh()
 
+    def doc_add(self, selector, element):
+        elem = self.document.cssselect(selector)[0]
+        elem.append(element)
+        self.refresh()
+
 class Widget:
     def __init__(self, book, widget_node):
         self.book = book
@@ -177,7 +186,7 @@ class TableWidget(Widget):
         for column in self.widget_node.cssselect('data-col'):
             self.columns[column.attrib['id']] = Column(table_id=self.id, id=column.attrib['id'], type_node=column[0])
 
-        self.header_json = {'columns': [ (k, c.to_json()) for k, c in self.columns.items() ]}
+        self.header_json = {'columns': [ c.to_json() for k, c in self.columns.items() ]}
 
     def run(self):
         self.data = self.book.store.get_rows(table_id=self.id)
@@ -233,7 +242,9 @@ class TableViewWidget(Widget):
             print('unknown action', value)
 
     def run(self):
-        if not self.table: return
+        if not self.table:
+            self.data_json = []
+            return
 
         self.data = []
         for row in self.table.data:
@@ -257,7 +268,7 @@ class VariableWidget(Widget):
     def run(self):
         row = self.book.store.get_row(self.id, 1)
         self.data = row['value'] if row else None
-        self.data_json = json.dumps(self.data)
+        self.data_json = self.data
 
     def set(self, path, value):
         assert len(path) == 0
