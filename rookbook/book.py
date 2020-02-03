@@ -3,6 +3,7 @@ from lxml.builder import E
 import sqlite3, collections, json
 from lxml.cssselect import CSSSelector
 import re
+from . import common
 
 class DefinitionError(Exception): pass
 
@@ -39,10 +40,12 @@ class SqliteStore:
     def delete_row(self, table_id, row_id):
         self.conn.execute('delete from rookbook_data where table_id = ? and row_id = ?',
                           (table_id, row_id))
+        self.conn.commit()
 
     def set_row(self, table_id, row_id, data):
         self.conn.execute('update rookbook_data set payload = ?, mtime = datetime() where table_id = ? and row_id = ?',
                           (json.dumps(data), table_id, row_id))
+        self.conn.commit()
 
     def insert(self, table_id, data):
         # TODO: transaction?
@@ -50,6 +53,7 @@ class SqliteStore:
         row_id = prev_row_id + 1 if prev_row_id is not None else 1
         self.conn.execute('insert into rookbook_data (table_id, mtime, row_id, payload) values (?,datetime(),?,?)',
                           (table_id, row_id, json.dumps(data)))
+        self.conn.commit()
 
     def set_field(self, table_id, row_id, key, value):
         row = self.get_row(table_id, row_id)
@@ -57,6 +61,7 @@ class SqliteStore:
             row = {key: value}
             self.conn.execute('insert into rookbook_data (table_id, mtime, row_id, payload) values (?,datetime(),?,?)',
                               (table_id, row_id, json.dumps(row)))
+            self.conn.commit()
         else:
             row[key] = value
             self.set_row(table_id, row_id, row)
@@ -87,6 +92,13 @@ class Book:
         parser = etree.XMLParser(remove_blank_text=True)
         with open(self.document_path) as f:
             self.document = etree.XML(f.read(), parser=parser)
+
+        self._doc_add_missing_ids()
+
+    def _document_updated(self):
+        self._doc_add_missing_ids()
+
+        common.write_file(self.document_path, self.get_document_text())
 
     def _load_data(self):
         model_section = self.document.cssselect('rookbook > model')[0]
@@ -125,27 +137,36 @@ class Book:
         ids = [ x.attrib['id'] for x in self.document.cssselect('[id]') ]
         return '_%d' % (max([ int(id[1:]) for id in ids if re.match(r'_\d+$', id) ]) + 1)
 
-    def doc_add_widget(self, parent_id, element_name):
-        target_sheet = self.document.cssselect('rookbook > sheet')[0]
-        new_id = self._doc_next_id()
-        target_sheet.append(E(element_name, id=new_id))
-        self.refresh()
-
     def doc_set_text(self, selector, new_value):
         elem = self.document.cssselect(selector)[0]
         elem.text = new_value
+        self._document_updated()
         self.refresh()
 
     def doc_delete(self, selector):
         elem = self.document.cssselect(selector)[0]
         parent_map = {c:p for p in self.document.iter() for c in p}
         parent_map[elem].remove(elem)
+        self._document_updated()
         self.refresh()
 
     def doc_add(self, selector, element):
         elem = self.document.cssselect(selector)[0]
         elem.append(element)
+        self._document_updated()
         self.refresh()
+
+    def doc_set_attr(self, selector, attrs):
+        elem = self.document.cssselect(selector)[0]
+        for k, v in attrs.items():
+            elem.attrib[k] = v
+        self._document_updated()
+        self.refresh()
+
+    def _doc_add_missing_ids(self):
+        for elem in self.document.cssselect('model > *, sheet > *, table > data-col, table-view > computed-cell'):
+            if 'id' not in elem.attrib:
+                elem.attrib['id'] = self._doc_next_id()
 
 class Widget:
     def __init__(self, book, widget_node):
@@ -168,15 +189,17 @@ class Widget:
             self._run_done = True
 
 class Column:
-    def __init__(self, id, table_id, type_node):
+    def __init__(self, id, table_id, type_node, name):
         self.type_node = type_node
         self.id = id
         self.table_id = table_id
+        self.name = name
 
     def to_json(self):
         return {
             'type_node': etree.tostring(self.type_node).decode(),
             'id': self.id,
+            'name': self.name,
             'table_id': self.table_id,
         }
 
@@ -184,7 +207,7 @@ class TableWidget(Widget):
     def init(self):
         self.columns = collections.OrderedDict()
         for column in self.widget_node.cssselect('data-col'):
-            self.columns[column.attrib['id']] = Column(table_id=self.id, id=column.attrib['id'], type_node=column[0])
+            self.columns[column.attrib['id']] = Column(table_id=self.id, id=column.attrib['id'], type_node=column[0], name=column.attrib.get('name') or column.attrib['id'])
 
         self.header_json = {'columns': [ c.to_json() for k, c in self.columns.items() ]}
 
@@ -228,7 +251,8 @@ class TableViewWidget(Widget):
 
         self.columns = collections.OrderedDict(self.table.columns)
         for cell in self.widget_node.cssselect('computed-cell'):
-            self.columns[cell.attrib['id']] = Column(table_id=self.id, id=cell.attrib['id'], type_node=E('computed', cell))
+            self.columns[cell.attrib['id']] = Column(table_id=self.id, id=cell.attrib['id'], type_node=E('computed', cell),
+                                                     name=column.attrib.get('name') or column.attrib['id'])
 
         self.header_json = {'columns': [ c.to_json() for k, c in self.columns.items() ]}
 

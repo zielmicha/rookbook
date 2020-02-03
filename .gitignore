@@ -2,3 +2,4 @@
 node_modules/
 .mypy_cache/
 /client/dist
+*.tmpdb

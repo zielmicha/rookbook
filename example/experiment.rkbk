@@ -1,0 +1,15 @@
+<rookbook>
+  <model>
+  </model>
+  <sheet id="_1">
+    <text id="_2">FOO</text>
+    <table id="_3">
+      <data-col id="_4" name="Nazwa">
+        <string/>
+      </data-col>
+      <data-col id="_5" name="Wersja">
+        <string/>
+      </data-col>
+    </table>
+  </sheet>
+</rookbook>

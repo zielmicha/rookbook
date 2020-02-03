@@ -1,34 +1,8 @@
 import * as React from "react";
 import * as ReactDOM from "react-dom";
 import * as Immutable from "immutable";
-
-let globalWebsocket: WebSocket = null
-
-function escapeCssValue(value: string) {
-    return '"' + value + '"'; // TODO: incorrect and unsafe!
-}
-
-function replaceValuePath(value: any, path: Array<string>, newValue: any): any {
-    if (path.length == 0) {
-	return newValue;
-    } else {
-	if (value && !value.asImmutable) throw "this pending value has no subvalues";
-	let oldContainer = value ? value.get(path[0]) : Immutable.Map({});
-	let newContainer = replaceValuePath(oldContainer, path.slice(1), newValue);
-	return (value || Immutable.Map()).set(path[0], newContainer);
-    }
-}
-
-function immutableMap<K, V>(m: Immutable.Map<K, V>, f: ((v: V) => V)): Immutable.Map<K, V> {
-    let anythingChanged = false;
-    let result = m.map((v: V) => {
-	const v1 = f(v);
-	if (v !== v1) anythingChanged = true;
-	return v1;
-    });
-    if (anythingChanged) return result;
-    else return m;
-}
+import {escapeCssValue, split2, splitPathAndUnescape, replaceValuePath, immutableMap}
+from "./common";
 
 function pruneOldAux(maxEpoch: number, value: any): any {
     if (!value) {
@@ -38,7 +12,7 @@ function pruneOldAux(maxEpoch: number, value: any): any {
 	return value;
     } else {
 	if (!value.asImmutable) throw "bad type?";
-	return immutableMap(value, (v) => pruneOldAux(maxEpoch, v));
+	return immutableMap(value, (v: any) => pruneOldAux(maxEpoch, v));
     }
 }
 
@@ -217,6 +191,7 @@ interface ColumnInfo {
     id: string;
     table_id: string;
     type_node: string;
+    name: string;
 }
 
 function ChooseValueWidget({ value, choices, onChange }: { choices: Array<Element>, value: any, onChange: ((x: any) => void) }) {
@@ -309,10 +284,10 @@ function ColumnHeader({ bookState, columnInfo } : { bookState: BookState, column
 	}
     }, [columnInfo, bookState]);
 
-    const cellEditLink = '#/column/' + encodeURIComponent(columnInfo.table_id) + '/' + encodeURIComponent(columnInfo.id);
+    const cellEditLink = '#column/' + encodeURIComponent(columnInfo.table_id) + '/' + encodeURIComponent(columnInfo.id);
 
     return <td tabIndex={0}
-               onKeyUp={onKeyUp}>{ columnInfo.id } <a href={cellEditLink}>edit</a> </td>
+               onKeyUp={onKeyUp}>{ columnInfo.name } <a href={cellEditLink}>edit</a> </td>
 }
 
 function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
@@ -333,13 +308,13 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
 	    bookState.sendMessage({
 		'type': 'doc-add',
 		'selector': 'table[id=' + escapeCssValue(id) + ']',
-		'xml': '<data-col id="column1"><string/></data-col>'
+		'xml': '<data-col><string/></data-col>'
 	    })
 	} else {
 	    bookState.sendMessage({
 		'type': 'doc-add',
 		'selector': 'table-view[id=' + escapeCssValue(id) + ']',
-		'xml': '<computed-col id="column1"><python>None</python></computed-col>'
+		'xml': '<computed-col><python>None</python></computed-col>'
 	    })
 	}
     }, [bookState, xmlNode, id]);
@@ -367,6 +342,7 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
 		})}
 	    </tbody>
 	</table>
+	<FoldableXmlEditor bookState={bookState} xmlNode={xmlNode} />
     </div>;
 }
 
@@ -376,9 +352,9 @@ function LinearLayoutWidget({ bookState, xmlNode }: { bookState: BookState, xmlN
 	let type = (addItemTypeRef.current as HTMLSelectElement).value;
 
 	bookState.sendMessage({
-	    type: 'doc-add-widget',
-	    parentId: xmlNode.id,
-	    element: type
+	    type: 'doc-add',
+	    selector: '[id=' + escapeCssValue(xmlNode.id) + ']',
+	    xml: "<" + type + "/>"
 	});
     }, [bookState, addItemTypeRef]);
 
@@ -402,7 +378,62 @@ function parseXml(s: string): Element {
     return new DOMParser().parseFromString(s, "text/xml").children[0];
 }
 
-function Main({ currentLocation }: { currentLocation: string }) {
+function XmlEditor({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
+    let xmlString = new XMLSerializer().serializeToString(xmlNode)
+    return <div>
+	<textarea defaultValue={xmlString}></textarea>
+    </div>
+}
+
+function FoldableXmlEditor(props: { bookState: BookState, xmlNode: Element }) {
+    let [visible, setVisible] = React.useState(false);
+    return <div>
+    <a href="#" onClick={(ev) => {ev.preventDefault(); setVisible(!visible);}}
+    style={{'float': 'right'}}>Edit XML</a>
+	{ visible ? <XmlEditor {...props} /> : null }
+    </div>
+}
+
+function ColumnDialog({ locationPath, bookState, xmlNode } : { locationPath : string, bookState: BookState, xmlNode: Element }) {
+    let [tableId, columnId] = splitPathAndUnescape(locationPath);
+
+    let columnSelector = "[id=" + escapeCssValue(tableId) + "] [id=" + escapeCssValue(columnId) + "]";
+    let tableElem = xmlNode.querySelector("[id=" + escapeCssValue(tableId) + "]");
+    let columnElem = tableElem.querySelector("[id=" + escapeCssValue(columnId) + "]");
+
+    let nameRef: React.RefObject<HTMLInputElement> = React.useRef();
+
+    const save = React.useCallback((ev) => {
+	ev.preventDefault()
+	bookState.sendMessage({
+	    "type": "doc-set-attr",
+	    "selector": columnSelector,
+	    "attrs": {"name": nameRef.current.value}
+	})
+    }, [bookState, tableId, columnId]);
+
+    return <form onSubmit={save}>
+	<b>tableId: {tableId}, columnId: {columnId}</b>
+	<div>
+	    Name: <input ref={nameRef} defaultValue={columnElem.getAttribute('name')} />
+	</div>
+	<FoldableXmlEditor bookState={bookState} xmlNode={columnElem} />
+	<button>Save</button>
+    </form>
+}
+
+function DialogContent({ locationPath, bookState, xmlNode } : { locationPath: string, bookState: BookState, xmlNode: Element }) {
+    let [name, rest] = split2(locationPath, "/");
+
+    // use key={locationPath} to avoid leaking state between different widgets
+    if (name == "column") {
+	return <ColumnDialog key={locationPath} locationPath={rest} bookState={bookState} xmlNode={xmlNode} />
+    }
+
+    return <b>unknown path {locationPath}</b>;
+}
+
+function Main({ locationPath }: { locationPath: string }) {
     const [xmlData, setXmlData] = React.useState();
     const [bookState, setBookState] = React.useState(new BookState((x) => setBookState(x)));
     const xmlNode = React.useMemo(() => xmlData && parseXml(xmlData), [xmlData]);
@@ -428,7 +459,11 @@ function Main({ currentLocation }: { currentLocation: string }) {
     if (xmlNode) {
 	const rootSheet = xmlNode.querySelector('rookbook > sheet');
 	return <div>
-	    <div>location: {currentLocation}</div>
+	    {locationPath ?
+	     <dialog open>
+		 <a href="#" className="close-button">x</a>
+		 <DialogContent xmlNode={rootSheet} bookState={bookState} locationPath={locationPath} />
+	     </dialog>  : null }
 	    <LinearLayoutWidget bookState={bookState} xmlNode={rootSheet} />
 	    <pre>{xmlData}</pre>
 	</div>;
@@ -438,12 +473,12 @@ function Main({ currentLocation }: { currentLocation: string }) {
 }
 
 function MainRouter() {
-    const [currentLocation, setCurrentLocation] = React.useState(location.hash);
+    const [currentLocation, setCurrentLocation] = React.useState(location.hash.slice(1));
 
     React.useEffect(() => {
-	window.addEventListener("hashchange", () => setCurrentLocation(location.hash), false);
+	window.addEventListener("hashchange", () => setCurrentLocation(location.hash.slice(1)), false);
     });
-    return <Main currentLocation={currentLocation} />
+    return <Main locationPath={currentLocation} />
 }
 
 ReactDOM.render(

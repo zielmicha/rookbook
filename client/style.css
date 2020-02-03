@@ -1,6 +1,5 @@
 .data-table {
     border-collapse: collapse;
-    min-width: 20em;
 }
 
 .data-table thead {
@@ -41,4 +40,8 @@
 
 .data-table td.id-cell {
     padding: 0em 1em;
-]
+}
+
+.close-button {
+    float: right;
+}

@@ -3,25 +3,25 @@
   <model>
 
     <table id="foo">
-      <data-col id="n1">
+      <data-col>
 	<int/>
       </data-col>
-      <data-col id="n2">
+      <data-col>
 	<choice>
 	  <option id="foo" />
 	  <option id="bar" />
 	</choice>
       </data-col>
-      <data-col id="n3">
+      <data-col id="col1">
 	<string/>
       </data-col>
     </table>
 
-    <variable id="counter12"><int/></variable>
+    <variable><int/></variable>
 
-    <table-view id="foo1">
+    <table-view>
       <use-table id="foo">
-	<skip-col id="n2" />
+	<skip-col id="col1" />
       </use-table>
     </table-view>
   </model>

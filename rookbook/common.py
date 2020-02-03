@@ -1,4 +1,4 @@
-import os, threading
+import os, threading, binascii
 
 def _run_asyncio_ipython(loop, local_ns):
     import IPython, concurrent.futures
@@ -28,3 +28,10 @@ def start_asyncio_ipython(local_ns):
     import asyncio
     loop = asyncio.get_event_loop()
     threading.Thread(target=_run_asyncio_ipython, args=[loop, local_ns]).start()
+
+def write_file(path, data):
+    tmp_path = path + '.' + binascii.hexlify(os.urandom(6)).decode()
+    if isinstance(data, str): data = data.encode('utf8')
+    with open(tmp_path, 'wb') as f:
+        f.write(data)
+    os.rename(tmp_path, path)

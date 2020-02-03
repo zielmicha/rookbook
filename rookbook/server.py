@@ -94,11 +94,15 @@ class Handler:
         elif msg['type'] == 'doc-add':
             self.book.doc_add(selector=msg['selector'], element=etree.XML(msg['xml']))
             await self.full_update()
+        elif msg['type'] == 'doc-set-attr':
+            self.book.doc_set_attr(selector=msg['selector'], attrs=msg['attrs'])
+            await self.full_update()
         else:
             print('unknown message', msg)
 
 if __name__ == '__main__':
-    book = book.Book(document_path='example/simple.rkbk', data_path=':memory:')
+    import sys
+    book = book.Book(document_path=sys.argv[1], data_path=sys.argv[2])
     #book.store.insert(table_id='foo', data={'n1': 5, 'n2': 'foo'})
     book.refresh()
 
