@@ -4,6 +4,9 @@ import * as Immutable from "immutable";
 import {escapeCssValue, split2, splitPathAndUnescape, replaceValuePath, immutableMap}
 from "./common";
 
+let callIdCounter = 0;
+let callCallbacks: Map<number, ((resp: any) => void)> = new Map();
+
 function pruneOldAux(maxEpoch: number, value: any): any {
     if (!value) {
 	return null;
@@ -109,6 +112,15 @@ class BookState {
 	this.websocket.send(JSON.stringify(data));
     }
 
+    call(data: {type: string} & any): Promise<any> {
+	return new Promise((resolve, reject) => {
+	    let callId = callIdCounter++;
+	    data.call_id = callId;
+	    callCallbacks.set(callId, resolve);
+	    this.sendMessage(data);
+	});
+    }
+
     copy(): BookState {
 	let state = new BookState(this.setSelf);
 	state.editable = this.editable;
@@ -150,6 +162,10 @@ function renderNode(props: { bookState: BookState, xmlNode: Element }) {
     }
 }
 
+function EditButton({ onClick }: { onClick: (() => void) }) {
+    return <button className="edit-button" onClick={onClick}>✎</button>
+}
+
 function TextWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
     const id = xmlNode.id;
     const [editing, setEditing] = React.useState(false);
@@ -175,11 +191,11 @@ function TextWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: Ele
     return (!editing ?
 	    <div>
 		{xmlNode.textContent || "(empty)"}
-		<a href="#" onClick={startEdit}>Edit</a>
+		<EditButton onClick={startEdit} />
 	    </div> :
-	    <form onSubmit={confirmEditing}>
+	    <form onSubmit={confirmEditing} className="padded">
 		<textarea value={editedText} onChange={editedOnChange}></textarea>
-		<button>Save</button>
+		<div><button className="big-save">Save</button></div>
 	    </form>);
 }
 
@@ -225,7 +241,7 @@ const ValueWidget = React.memo(({ typeXml, pendingValue, value }: { typeXml: Ele
     } else if (typeXml.nodeName == "choice") {
 	return <ChooseValueWidget choices={Array.from(typeXml.children)} value={currentValue} onChange={pendingValue.doSet} />
     } else {
-	return <span className="unknown">{ typeXml.nodeName }: { currentValue }</span>
+	return <span className="unknown">{ typeXml.nodeName }: { JSON.stringify(currentValue) }</span>
     }
 }, (props1, props2) => {
     return pendingValueEqual(props1.pendingValue, props2.pendingValue) && props1.value === props2.value && props1.typeXml == props2.typeXml
@@ -287,7 +303,7 @@ function ColumnHeader({ bookState, columnInfo } : { bookState: BookState, column
     const cellEditLink = '#column/' + encodeURIComponent(columnInfo.table_id) + '/' + encodeURIComponent(columnInfo.id);
 
     return <td tabIndex={0}
-               onKeyUp={onKeyUp}>{ columnInfo.name } <a href={cellEditLink}>edit</a> </td>
+               onKeyUp={onKeyUp}>{ columnInfo.name } <a className="edit-button" href={cellEditLink}>✎</a> </td>
 }
 
 function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
@@ -319,9 +335,19 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
 	}
     }, [bookState, xmlNode, id]);
 
+    const editTable = React.useCallback(() => {
+	location.hash = "#table/" + id;
+    }, [id]);
+
     return <div>
 	<table className="data-table">
 	    <thead>
+		<tr>
+		    <td colSpan={header.columns.length+1}>
+			{xmlNode.getAttribute('name')}
+			<EditButton onClick={editTable} />
+		    </td>
+		</tr>
 		<tr>
 		    <td></td>
 		    {header.columns.map((col: ColumnInfo) => {
@@ -342,7 +368,6 @@ function TableWidget({ bookState, xmlNode }: { bookState: BookState, xmlNode: El
 		})}
 	    </tbody>
 	</table>
-	<FoldableXmlEditor bookState={bookState} xmlNode={xmlNode} />
     </div>;
 }
 
@@ -378,18 +403,37 @@ function parseXml(s: string): Element {
     return new DOMParser().parseFromString(s, "text/xml").children[0];
 }
 
-function XmlEditor({ bookState, xmlNode }: { bookState: BookState, xmlNode: Element }) {
+function XmlEditor({ bookState, xmlNode, selector }: { bookState: BookState, xmlNode: Element, selector: string }) {
     let xmlString = new XMLSerializer().serializeToString(xmlNode)
-    return <div>
-	<textarea defaultValue={xmlString}></textarea>
+
+    const textareaRef: React.RefObject<HTMLTextAreaElement> = React.useRef();
+    const [statusText, setStatusText] = React.useState("");
+
+    const save = React.useCallback((ev) => {
+	ev.preventDefault();
+	let newXmlString = textareaRef.current.value;
+	(async () => {
+	    let resp = await bookState.call({
+		type: "doc-replace-xml",
+		selector: selector,
+		new_xml: newXmlString
+	    });
+	    setStatusText(JSON.stringify(resp))
+	})();
+    }, [xmlNode, bookState]);
+
+    return <div className="xml-editor">
+	<textarea ref={textareaRef} defaultValue={xmlString}></textarea>
+	<button onClick={save}>Save XML</button>
+	<div>{statusText}</div>
     </div>
 }
 
-function FoldableXmlEditor(props: { bookState: BookState, xmlNode: Element }) {
+function FoldableXmlEditor(props: { bookState: BookState, xmlNode: Element, selector: string }) {
     let [visible, setVisible] = React.useState(false);
     return <div>
-    <a href="#" onClick={(ev) => {ev.preventDefault(); setVisible(!visible);}}
-    style={{'float': 'right'}}>Edit XML</a>
+	<a href="#" onClick={(ev) => {ev.preventDefault(); setVisible(!visible);}}
+	   style={{'float': 'right'}}>Edit XML</a>
 	{ visible ? <XmlEditor {...props} /> : null }
     </div>
 }
@@ -410,14 +454,41 @@ function ColumnDialog({ locationPath, bookState, xmlNode } : { locationPath : st
 	    "selector": columnSelector,
 	    "attrs": {"name": nameRef.current.value}
 	})
-    }, [bookState, tableId, columnId]);
+    }, [bookState, tableId, columnId, nameRef]);
 
     return <form onSubmit={save}>
-	<b>tableId: {tableId}, columnId: {columnId}</b>
+	<h2>Editing column of table {tableElem.getAttribute('name')}</h2>
 	<div>
 	    Name: <input ref={nameRef} defaultValue={columnElem.getAttribute('name')} />
 	</div>
-	<FoldableXmlEditor bookState={bookState} xmlNode={columnElem} />
+	<FoldableXmlEditor bookState={bookState} xmlNode={columnElem} selector={columnSelector} />
+	<button>Save</button>
+    </form>
+}
+
+function TableDialog({ locationPath, bookState, xmlNode } : { locationPath : string, bookState: BookState, xmlNode: Element }) {
+    let [tableId] = splitPathAndUnescape(locationPath);
+
+    let tableSelector = "[id=" + escapeCssValue(tableId) + "]";
+    let tableElem = xmlNode.querySelector(tableSelector);
+
+    let nameRef: React.RefObject<HTMLInputElement> = React.useRef();
+
+    const save = React.useCallback((ev) => {
+	ev.preventDefault()
+	bookState.sendMessage({
+	    "type": "doc-set-attr",
+	    "selector": tableSelector,
+	    "attrs": {"name": nameRef.current.value}
+	})
+    }, [bookState, tableId, nameRef]);
+
+    return <form onSubmit={save}>
+	<h2>Editing table settings</h2>
+	<div>
+	    Name: <input ref={nameRef} defaultValue={tableElem.getAttribute('name')} />
+	</div>
+	<FoldableXmlEditor bookState={bookState} xmlNode={tableElem} selector={tableSelector} />
 	<button>Save</button>
     </form>
 }
@@ -428,6 +499,8 @@ function DialogContent({ locationPath, bookState, xmlNode } : { locationPath: st
     // use key={locationPath} to avoid leaking state between different widgets
     if (name == "column") {
 	return <ColumnDialog key={locationPath} locationPath={rest} bookState={bookState} xmlNode={xmlNode} />
+    } else if (name == "table") {
+	return <TableDialog key={locationPath} locationPath={rest} bookState={bookState} xmlNode={xmlNode} />
     }
 
     return <b>unknown path {locationPath}</b>;
@@ -446,6 +519,10 @@ function Main({ locationPath }: { locationPath: string }) {
 	    setBookState(bookState => bookState.withData(msg.id, msg));
 	} else if (msg.type == "set-done") {
 	    setBookState(bookState => bookState.withServerEpochDone(msg.epoch));
+	} else if (msg.type == "response") {
+	    let cb = callCallbacks.get(msg.id);
+	    callCallbacks.delete(msg.id)
+	    cb(msg.data);
 	} else {
 	    console.log("unknown message", msg)
 	}
@@ -456,11 +533,18 @@ function Main({ locationPath }: { locationPath: string }) {
 	bookState.websocket.onmessage = websocketMessage;
     }, []);
 
+    const onKeyUp = React.useCallback((ev) => {
+	if (ev.keyCode === 27 /* escape */) {
+	    ev.preventDefault();
+	    location.hash = '#';
+	}
+    }, []);
+
     if (xmlNode) {
 	const rootSheet = xmlNode.querySelector('rookbook > sheet');
-	return <div>
+	return <div onKeyUp={onKeyUp}>
 	    {locationPath ?
-	     <dialog open>
+	     <dialog open onKeyUp={onKeyUp}>
 		 <a href="#" className="close-button">x</a>
 		 <DialogContent xmlNode={rootSheet} bookState={bookState} locationPath={locationPath} />
 	     </dialog>  : null }

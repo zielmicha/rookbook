@@ -2,8 +2,8 @@
   <model>
   </model>
   <sheet id="_1">
-    <text id="_2">FOO</text>
-    <table id="_3">
+    <text id="_2">FOO123</text>
+    <table id="_3" name="Tabela31">
       <data-col id="_4" name="Nazwa">
         <string/>
       </data-col>
@@ -11,5 +11,21 @@
         <string/>
       </data-col>
     </table>
+    <text id="_6">dfsdfsdf</text>
+    <text id="_7">HALO HALO</text>
+    <table id="_8" name="Foo0">
+      <data-col id="_9" name="kolumna1">
+        <string/>
+      </data-col>
+      <data-col id="_10" name="kolumna2">
+        <string/>
+      </data-col>
+    </table>
+    <table-view id="_11">
+      <use-table href="_3"/>
+      <computed-col id="_12" name="Comp">
+        <python>row._4</python>
+      </computed-col>
+    </table-view>
   </sheet>
 </rookbook>

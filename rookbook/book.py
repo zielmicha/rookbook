@@ -3,6 +3,7 @@ from lxml.builder import E
 import sqlite3, collections, json
 from lxml.cssselect import CSSSelector
 import re
+from copy import deepcopy
 from . import common
 
 class DefinitionError(Exception): pass
@@ -88,12 +89,25 @@ class Book:
         self.widgets[path[0]].action(path[1:], value)
         self.refresh()
 
+    def evaluate(self, cell, ns):
+        if cell.tag == 'python':
+            code = cell.text
+            try:
+                return {'result': repr(eval(code, ns))}
+            except Exception as exc:
+                return {'error': str(exc)}
+        else:
+            return {'error': 'unsupported language'}
+
     def _load_doc(self):
         parser = etree.XMLParser(remove_blank_text=True)
         with open(self.document_path) as f:
             self.document = etree.XML(f.read(), parser=parser)
 
+        print('loaded', self.get_document_text())
+
         self._doc_add_missing_ids()
+        print('loaded', self.get_document_text())
 
     def _document_updated(self):
         self._doc_add_missing_ids()
@@ -164,9 +178,19 @@ class Book:
         self.refresh()
 
     def _doc_add_missing_ids(self):
-        for elem in self.document.cssselect('model > *, sheet > *, table > data-col, table-view > computed-cell'):
+        for elem in self.document.cssselect('model > *, sheet > *, table > data-col, table-view > computed-col'):
             if 'id' not in elem.attrib:
                 elem.attrib['id'] = self._doc_next_id()
+
+    def doc_replace_xml(self, selector, element):
+        elem = self.document.cssselect(selector)[0]
+        # ignore mismatching tags, only update attrib and children
+        elem.clear()
+        elem.extend(list(element))
+        elem.attrib.clear()
+        elem.attrib.update(element.attrib)
+        self._document_updated()
+        self.refresh()
 
 class Widget:
     def __init__(self, book, widget_node):
@@ -234,6 +258,8 @@ class TableWidget(Widget):
 
 class TableViewWidget(Widget):
     def init(self):
+
+        print('zzz', self.book.get_document_text())
         use_table_n = self.widget_node.cssselect('use-table')
         if len(use_table_n) != 1:
             print(self.id, ': invalid number of use-table stmts')
@@ -243,16 +269,16 @@ class TableViewWidget(Widget):
             return
 
         use_table, = use_table_n
-        self.table = self.book.widgets[use_table.attrib['id']]
+        self.table = self.book.widgets[use_table.attrib['href']]
         assert self.table != self
         # TODO: skip-col
 
         self.table.request_init()
 
         self.columns = collections.OrderedDict(self.table.columns)
-        for cell in self.widget_node.cssselect('computed-cell'):
-            self.columns[cell.attrib['id']] = Column(table_id=self.id, id=cell.attrib['id'], type_node=E('computed', cell),
-                                                     name=column.attrib.get('name') or column.attrib['id'])
+        for col in self.widget_node.cssselect('computed-col'):
+            self.columns[col.attrib['id']] = Column(table_id=self.id, id=col.attrib['id'], type_node=E('computed', deepcopy(col)),
+                                                    name=col.attrib.get('name') or col.attrib['id'])
 
         self.header_json = {'columns': [ c.to_json() for k, c in self.columns.items() ]}
 
@@ -273,11 +299,11 @@ class TableViewWidget(Widget):
         self.data = []
         for row in self.table.data:
             new_row = row
-            for cell in self.widget_node.cssselect('computed-cell'):
+            for cell in self.widget_node.cssselect('computed-col'):
                 row_ns = {
-                    'row': collections.namedtuple('Row', new_row.keys())(new_row)
+                    'row': new_row
                 }
-                new_row = Row(new_row._id, dict(new_row._data, **{cell.attrib['id']: self.book.evaluate(cell[0], row_ns)}))
+                new_row = Row(new_row._id, dict(new_row._data, **{cell.attrib['name']: self.book.evaluate(cell[0], row_ns)}))
 
             self.data.append(new_row)
 

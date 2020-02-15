@@ -61,7 +61,9 @@ class Handler:
             self.websockets.remove(websocket)
 
     async def send_full_update(self, websocket):
-        await websocket.send(json.dumps({'type': 'document', 'data': self.book.get_document_text()}))
+        document = self.book.get_document_text()
+        print('send', document)
+        await websocket.send(json.dumps({'type': 'document', 'data': '<!-- gen -->\n' + document}))
 
         for id, widget in self.book.widgets.items():
             await websocket.send(json.dumps({'type': 'data', 'id': id,
@@ -73,7 +75,15 @@ class Handler:
         for ws in self.websockets:
             await self.send_full_update(ws)
 
+    async def send_result(self, websocket, req, data):
+        await websocket.send(json.dumps({
+            'type': 'response',
+            'id': req['call_id'],
+            'data': data
+        }))
+
     async def handle_message(self, websocket, msg_data):
+        print('msg', msg_data)
         msg = json.loads(msg_data)
         if msg['type'] == 'set':
             self.book.set(msg['path'], msg['value'])
@@ -92,18 +102,28 @@ class Handler:
             self.book.doc_delete(selector=msg['selector'])
             await self.full_update()
         elif msg['type'] == 'doc-add':
-            self.book.doc_add(selector=msg['selector'], element=etree.XML(msg['xml']))
+            parser = etree.XMLParser(remove_blank_text=True)
+            self.book.doc_add(selector=msg['selector'], element=etree.XML(msg['xml'], parser=parser))
             await self.full_update()
         elif msg['type'] == 'doc-set-attr':
             self.book.doc_set_attr(selector=msg['selector'], attrs=msg['attrs'])
             await self.full_update()
+        elif msg['type'] == 'doc-replace-xml':
+            parser = etree.XMLParser(remove_blank_text=True)
+            try:
+                xml = etree.XML(msg['new_xml'], parser=parser)
+            except Exception:
+                await self.send_result(websocket, msg, {'error': 'failed to parse XML'})
+            else:
+                self.book.doc_replace_xml(msg['selector'], xml)
+                await self.send_result(websocket, msg, {'ok': True})
+                await self.full_update()
         else:
             print('unknown message', msg)
 
 if __name__ == '__main__':
     import sys
     book = book.Book(document_path=sys.argv[1], data_path=sys.argv[2])
-    #book.store.insert(table_id='foo', data={'n1': 5, 'n2': 'foo'})
     book.refresh()
 
     from . import common

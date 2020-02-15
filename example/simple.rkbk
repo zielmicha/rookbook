@@ -20,8 +20,8 @@
     <variable><int/></variable>
 
     <table-view>
-      <use-table id="foo">
-	<skip-col id="col1" />
+      <use-table href="foo">
+	<skip-col href="col1" />
       </use-table>
     </table-view>
   </model>
